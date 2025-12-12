@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { GAME_CONFIG, COLORS } from '../config';
 import { NetworkManager } from '../network/NetworkManager';
+import { HUD } from '../ui/HUD';
 
 // Constants inline to avoid import issues
 const KEEP_WIDTH = 96;
@@ -24,6 +25,21 @@ interface GameSceneData {
   playerId?: string;
 }
 
+interface GameState {
+  wave: number;
+  maxWaves: number;
+  phase: string;
+  phaseTimer: number;
+  resources: {
+    wood: number;
+    gold: number;
+  };
+  keep: {
+    hp: number;
+    maxHp: number;
+  };
+}
+
 export class GameScene extends Phaser.Scene {
   // Network
   private network!: NetworkManager;
@@ -36,7 +52,9 @@ export class GameScene extends Phaser.Scene {
 
   // Players
   private localPlayerGraphics!: Phaser.GameObjects.Arc;
+  private localPlayerHpBar!: Phaser.GameObjects.Graphics;
   private remotePlayers: Map<string, Phaser.GameObjects.Arc> = new Map();
+  private remotePlayerHpBars: Map<string, Phaser.GameObjects.Graphics> = new Map();
   private playerLabels: Map<string, Phaser.GameObjects.Text> = new Map();
   private players: Map<string, Player> = new Map();
 
@@ -62,6 +80,19 @@ export class GameScene extends Phaser.Scene {
   // Movement tracking
   private lastMoveTime: number = 0;
   private moveInterval: number = 50; // Send move updates every 50ms
+
+  // HUD
+  private hud!: HUD;
+
+  // Game state
+  private gameState: Partial<GameState> = {
+    wave: 1,
+    maxWaves: 10,
+    phase: 'prep',
+    phaseTimer: 30000,
+    resources: { wood: 100, gold: 100 },
+    keep: { hp: 100, maxHp: 100 },
+  };
 
   constructor() {
     super({ key: 'GameScene' });
@@ -102,6 +133,10 @@ export class GameScene extends Phaser.Scene {
 
     // Set up network listeners
     this.setupNetworkListeners();
+
+    // Create HUD
+    this.hud = new HUD(this);
+    this.hud.update(this.gameState);
   }
 
   private drawGrid(): void {
@@ -148,6 +183,33 @@ export class GameScene extends Phaser.Scene {
     );
     this.localPlayerGraphics.setStrokeStyle(2, 0x2c4c9a);
     this.localPlayerGraphics.setDepth(10);
+
+    // Create HP bar
+    this.localPlayerHpBar = this.add.graphics();
+    this.localPlayerHpBar.setDepth(11);
+    this.updateLocalPlayerHpBar();
+  }
+
+  private updateLocalPlayerHpBar(): void {
+    this.localPlayerHpBar.clear();
+
+    const barWidth = 32;
+    const barHeight = 4;
+    const barX = this.localPlayerX - barWidth / 2;
+    const barY = this.localPlayerY + PLAYER_RADIUS + 5;
+
+    // Background (dark red)
+    this.localPlayerHpBar.fillStyle(0x660000, 1);
+    this.localPlayerHpBar.fillRect(barX, barY, barWidth, barHeight);
+
+    // HP fill (bright red)
+    const hpPercent = 1.0; // 100% for now
+    this.localPlayerHpBar.fillStyle(0xff0000, 1);
+    this.localPlayerHpBar.fillRect(barX, barY, barWidth * hpPercent, barHeight);
+
+    // Border
+    this.localPlayerHpBar.lineStyle(1, 0xffffff, 0.5);
+    this.localPlayerHpBar.strokeRect(barX, barY, barWidth, barHeight);
   }
 
   private setupInput(): void {
@@ -163,6 +225,23 @@ export class GameScene extends Phaser.Scene {
   }
 
   private setupNetworkListeners(): void {
+    // Handle game state (full state on join)
+    this.network.on('game_state', (data: { state: GameState }) => {
+      this.gameState = data.state;
+      this.hud.update(this.gameState);
+    });
+
+    // Handle phase changes
+    this.network.on(
+      'phase_change',
+      (data: { phase: string; wave?: number; timer?: number }) => {
+        this.gameState.phase = data.phase;
+        if (data.wave !== undefined) this.gameState.wave = data.wave;
+        if (data.timer !== undefined) this.gameState.phaseTimer = data.timer;
+        this.hud.update(this.gameState);
+      }
+    );
+
     // Handle state updates
     this.network.on('state_delta', (data: { players?: Partial<Player>[] }) => {
       if (data.players) {
@@ -211,14 +290,51 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    // Add HP bar
+    const hpBar = this.add.graphics();
+    hpBar.setDepth(11);
+
     this.remotePlayers.set(player.id, graphics);
+    this.remotePlayerHpBars.set(player.id, hpBar);
     this.playerLabels.set(player.id, label);
     this.players.set(player.id, player);
+
+    this.updateRemotePlayerHpBar(player.id, player.position.x, player.position.y, 1.0);
+  }
+
+  private updateRemotePlayerHpBar(
+    playerId: string,
+    x: number,
+    y: number,
+    hpPercent: number
+  ): void {
+    const hpBar = this.remotePlayerHpBars.get(playerId);
+    if (!hpBar) return;
+
+    hpBar.clear();
+
+    const barWidth = 32;
+    const barHeight = 4;
+    const barX = x - barWidth / 2;
+    const barY = y + PLAYER_RADIUS + 5;
+
+    // Background (dark red)
+    hpBar.fillStyle(0x660000, 1);
+    hpBar.fillRect(barX, barY, barWidth, barHeight);
+
+    // HP fill (bright red)
+    hpBar.fillStyle(0xff0000, 1);
+    hpBar.fillRect(barX, barY, barWidth * hpPercent, barHeight);
+
+    // Border
+    hpBar.lineStyle(1, 0xffffff, 0.5);
+    hpBar.strokeRect(barX, barY, barWidth, barHeight);
   }
 
   private updateRemotePlayer(player: Partial<Player> & { id: string }): void {
     const graphics = this.remotePlayers.get(player.id);
     const label = this.playerLabels.get(player.id);
+    const existingPlayer = this.players.get(player.id);
 
     if (player.position) {
       if (graphics) {
@@ -227,10 +343,19 @@ export class GameScene extends Phaser.Scene {
       if (label) {
         label.setPosition(player.position.x, player.position.y - 25);
       }
+
+      // Update HP bar position and value
+      const hpPercent =
+        player.hp !== undefined && player.maxHp !== undefined
+          ? player.hp / player.maxHp
+          : existingPlayer
+            ? existingPlayer.hp / existingPlayer.maxHp
+            : 1.0;
+
+      this.updateRemotePlayerHpBar(player.id, player.position.x, player.position.y, hpPercent);
     }
 
     // Update stored player data
-    const existingPlayer = this.players.get(player.id);
     if (existingPlayer) {
       Object.assign(existingPlayer, player);
     }
@@ -239,6 +364,7 @@ export class GameScene extends Phaser.Scene {
   private removeRemotePlayer(playerId: string): void {
     const graphics = this.remotePlayers.get(playerId);
     const label = this.playerLabels.get(playerId);
+    const hpBar = this.remotePlayerHpBars.get(playerId);
 
     if (graphics) {
       graphics.destroy();
@@ -247,6 +373,10 @@ export class GameScene extends Phaser.Scene {
     if (label) {
       label.destroy();
       this.playerLabels.delete(playerId);
+    }
+    if (hpBar) {
+      hpBar.destroy();
+      this.remotePlayerHpBars.delete(playerId);
     }
     this.players.delete(playerId);
   }
@@ -314,6 +444,13 @@ export class GameScene extends Phaser.Scene {
   update(time: number, delta: number): void {
     if (!this.cursors || !this.wasd) return;
 
+    // Update HUD
+    if (this.gameState.phase === 'prep' && this.gameState.phaseTimer !== undefined) {
+      // Client-side timer countdown for smooth display
+      this.gameState.phaseTimer = Math.max(0, this.gameState.phaseTimer - delta);
+      this.hud.update(this.gameState);
+    }
+
     // Calculate movement direction
     let dx = 0;
     let dy = 0;
@@ -355,6 +492,9 @@ export class GameScene extends Phaser.Scene {
     // Update player graphics
     this.localPlayerGraphics.setPosition(this.localPlayerX, this.localPlayerY);
 
+    // Update HP bar position
+    this.updateLocalPlayerHpBar();
+
     // Send movement to server
     if (dx !== 0 || dy !== 0) {
       if (time - this.lastMoveTime > this.moveInterval) {
@@ -367,9 +507,15 @@ export class GameScene extends Phaser.Scene {
   shutdown(): void {
     this.network.removeAllListeners();
     this.remotePlayers.forEach((g) => g.destroy());
+    this.remotePlayerHpBars.forEach((h) => h.destroy());
     this.playerLabels.forEach((l) => l.destroy());
     this.remotePlayers.clear();
+    this.remotePlayerHpBars.clear();
     this.playerLabels.clear();
     this.players.clear();
+
+    if (this.hud) {
+      this.hud.destroy();
+    }
   }
 }

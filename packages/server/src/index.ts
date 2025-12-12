@@ -23,6 +23,40 @@ const io = new Server(httpServer, {
 // Lobby Manager
 const lobbyManager = new LobbyManager(io);
 
+// Collision detection helpers
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function circleRectCollide(
+  circleX: number,
+  circleY: number,
+  circleRadius: number,
+  rectX: number,
+  rectY: number,
+  rectWidth: number,
+  rectHeight: number
+): boolean {
+  const closestX = clamp(circleX, rectX, rectX + rectWidth);
+  const closestY = clamp(circleY, rectY, rectY + rectHeight);
+  const dx = circleX - closestX;
+  const dy = circleY - closestY;
+  return dx * dx + dy * dy < circleRadius * circleRadius;
+}
+
+function circlesCollide(
+  x1: number,
+  y1: number,
+  r1: number,
+  x2: number,
+  y2: number,
+  r2: number
+): boolean {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  return dx * dx + dy * dy < (r1 + r2) * (r1 + r2);
+}
+
 // Serve static files from client dist folder
 const clientDistPath = path.join(__dirname, '../../client/dist');
 app.use(express.static(clientDistPath));
@@ -84,6 +118,95 @@ io.on('connection', (socket) => {
     lobbyManager.handleReady(socket, data.ready);
   });
 
+  // Handle tower build
+  socket.on('build', (data: { gridX: number; gridY: number }) => {
+    const game = lobbyManager.getPlayerGame(socket.id);
+    if (!game) return;
+
+    const result = game.buildTower(data.gridX, data.gridY);
+    if (result.success && result.tower) {
+      // Broadcast tower built to all players
+      game.broadcast('tower_built', {
+        type: 'tower_built',
+        tower: result.tower,
+      });
+
+      // Broadcast updated resources
+      game.broadcast('resources_updated', {
+        type: 'resources_updated',
+        resources: game.resources,
+      });
+
+      console.log(`[Game ${game.id}] Tower built at (${data.gridX}, ${data.gridY})`);
+    } else {
+      socket.emit('error', {
+        type: 'error',
+        code: 'BUILD_FAILED',
+        message: result.error || 'Failed to build tower',
+      });
+    }
+  });
+
+  // Handle tower upgrade
+  socket.on('upgrade', (data: { towerId: string }) => {
+    const game = lobbyManager.getPlayerGame(socket.id);
+    if (!game) return;
+
+    const result = game.upgradeTower(data.towerId);
+    if (result.success && result.level !== undefined) {
+      // Broadcast tower upgraded to all players
+      game.broadcast('tower_upgraded', {
+        type: 'tower_upgraded',
+        towerId: data.towerId,
+        level: result.level,
+      });
+
+      // Broadcast updated resources
+      game.broadcast('resources_updated', {
+        type: 'resources_updated',
+        resources: game.resources,
+      });
+
+      console.log(`[Game ${game.id}] Tower ${data.towerId} upgraded to level ${result.level}`);
+    } else {
+      socket.emit('error', {
+        type: 'error',
+        code: 'UPGRADE_FAILED',
+        message: result.error || 'Failed to upgrade tower',
+      });
+    }
+  });
+
+  // Handle tower sell
+  socket.on('sell', (data: { towerId: string }) => {
+    const game = lobbyManager.getPlayerGame(socket.id);
+    if (!game) return;
+
+    const result = game.sellTower(data.towerId);
+    if (result.success && result.refund) {
+      // Broadcast tower sold to all players
+      game.broadcast('tower_sold', {
+        type: 'tower_sold',
+        towerId: data.towerId,
+        refund: result.refund,
+      });
+
+      // Broadcast updated resources
+      game.broadcast('resources_updated', {
+        type: 'resources_updated',
+        resources: game.resources,
+      });
+
+      console.log(`[Game ${game.id}] Tower ${data.towerId} sold`);
+    } else {
+      socket.emit('error', {
+        type: 'error',
+        code: 'SELL_FAILED',
+        message: result.error || 'Failed to sell tower',
+      });
+    }
+  });
+
   // Handle movement
   socket.on('move', (data: { direction: { x: number; y: number }; timestamp: number }) => {
     const game = lobbyManager.getPlayerGame(socket.id);
@@ -92,8 +215,22 @@ io.on('connection', (socket) => {
     const player = game.getPlayer(socket.id);
     if (!player || !player.isAlive) return;
 
+    // Constants
+    const PLAYER_SPEED = 200;
+    const TICK_MS = 50;
+    const PLAYER_RADIUS = 12;
+    const MAP_WIDTH = 800;
+    const MAP_HEIGHT = 600;
+    const KEEP_WIDTH = 96;
+    const KEEP_HEIGHT = 96;
+    const ALTAR_RADIUS = 20;
+    const KEEP_X = MAP_WIDTH / 2;
+    const KEEP_Y = MAP_HEIGHT / 2 - 32;
+    const ALTAR_X = MAP_WIDTH / 2;
+    const ALTAR_Y = MAP_HEIGHT / 2 + 48;
+
     // Update player position (server authoritative)
-    const speed = 200 * (50 / 1000); // PLAYER_SPEED * TICK_MS / 1000
+    const speed = PLAYER_SPEED * (TICK_MS / 1000);
     const dx = data.direction.x;
     const dy = data.direction.y;
 
@@ -106,12 +243,78 @@ io.on('connection', (socket) => {
       normalizedDy = dy / len;
     }
 
-    player.position.x += normalizedDx * speed;
-    player.position.y += normalizedDy * speed;
+    // Calculate new position
+    let newX = player.position.x + normalizedDx * speed;
+    let newY = player.position.y + normalizedDy * speed;
 
     // Clamp to bounds
-    player.position.x = Math.max(12, Math.min(800 - 12, player.position.x));
-    player.position.y = Math.max(12, Math.min(600 - 12, player.position.y));
+    newX = Math.max(PLAYER_RADIUS, Math.min(MAP_WIDTH - PLAYER_RADIUS, newX));
+    newY = Math.max(PLAYER_RADIUS, Math.min(MAP_HEIGHT - PLAYER_RADIUS, newY));
+
+    // Check collision with keep
+    const keepLeft = KEEP_X - KEEP_WIDTH / 2;
+    const keepTop = KEEP_Y - KEEP_HEIGHT / 2;
+    const keepCollision = circleRectCollide(
+      newX,
+      newY,
+      PLAYER_RADIUS,
+      keepLeft,
+      keepTop,
+      KEEP_WIDTH,
+      KEEP_HEIGHT
+    );
+
+    // Check collision with altar
+    const altarCollision = circlesCollide(newX, newY, PLAYER_RADIUS, ALTAR_X, ALTAR_Y, ALTAR_RADIUS);
+
+    // Update position if no collision
+    if (!keepCollision && !altarCollision) {
+      player.position.x = newX;
+      player.position.y = newY;
+    } else {
+      // Try sliding along walls
+      const keepXCollision = circleRectCollide(
+        newX,
+        player.position.y,
+        PLAYER_RADIUS,
+        keepLeft,
+        keepTop,
+        KEEP_WIDTH,
+        KEEP_HEIGHT
+      );
+      const altarXCollision = circlesCollide(
+        newX,
+        player.position.y,
+        PLAYER_RADIUS,
+        ALTAR_X,
+        ALTAR_Y,
+        ALTAR_RADIUS
+      );
+      if (!keepXCollision && !altarXCollision) {
+        player.position.x = newX;
+      }
+
+      const keepYCollision = circleRectCollide(
+        player.position.x,
+        newY,
+        PLAYER_RADIUS,
+        keepLeft,
+        keepTop,
+        KEEP_WIDTH,
+        KEEP_HEIGHT
+      );
+      const altarYCollision = circlesCollide(
+        player.position.x,
+        newY,
+        PLAYER_RADIUS,
+        ALTAR_X,
+        ALTAR_Y,
+        ALTAR_RADIUS
+      );
+      if (!keepYCollision && !altarYCollision) {
+        player.position.y = newY;
+      }
+    }
   });
 
   // Handle disconnection
@@ -121,10 +324,32 @@ io.on('connection', (socket) => {
   });
 });
 
-// Game loop - broadcast state updates
+// Game loop - update and broadcast state (20 ticks/sec)
 setInterval(() => {
-  // For each game, broadcast state delta to all players
-  // This will be enhanced later with proper delta compression
+  const games = lobbyManager.getAllGames();
+
+  for (const game of games) {
+    // Update game logic (phase manager, timers, etc.)
+    game.update(SERVER_CONFIG.tickMs);
+
+    // Broadcast state delta to all players during active phases
+    if (game.phase === 'prep' || game.phase === 'wave') {
+      const players = game.getPlayers().map((p) => ({
+        id: p.id,
+        position: p.position,
+        hp: p.hp,
+        isAlive: p.isAlive,
+      }));
+
+      if (players.length > 0) {
+        game.broadcast('state_delta', {
+          type: 'state_delta',
+          timestamp: Date.now(),
+          players,
+        });
+      }
+    }
+  }
 }, SERVER_CONFIG.tickMs);
 
 // Start server
