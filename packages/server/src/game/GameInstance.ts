@@ -1,4 +1,5 @@
 import { Socket, Server } from 'socket.io';
+import { PhaseManager } from './PhaseManager';
 
 // Types inline to avoid import issues
 interface Vector2 {
@@ -60,12 +61,19 @@ export class GameInstance {
   private players: Map<string, Player> = new Map();
   private sockets: Map<string, Socket> = new Map();
   private colorIndex: number = 0;
+  private phaseManager: PhaseManager;
 
   constructor(
     gameId: string,
     private io: Server
   ) {
     this.id = gameId;
+    this.phaseManager = new PhaseManager(this);
+  }
+
+  update(dt: number): void {
+    // Update phase manager
+    this.phaseManager.update(dt);
   }
 
   addPlayer(socket: Socket, nickname: string): Player | null {

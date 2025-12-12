@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { GAME_CONFIG, COLORS } from '../config';
 import { NetworkManager } from '../network/NetworkManager';
+import { HUD } from '../ui/HUD';
 
 // Constants inline to avoid import issues
 const KEEP_WIDTH = 96;
@@ -22,6 +23,21 @@ interface Player {
 interface GameSceneData {
   gameId?: string;
   playerId?: string;
+}
+
+interface GameState {
+  wave: number;
+  maxWaves: number;
+  phase: string;
+  phaseTimer: number;
+  resources: {
+    wood: number;
+    gold: number;
+  };
+  keep: {
+    hp: number;
+    maxHp: number;
+  };
 }
 
 export class GameScene extends Phaser.Scene {
@@ -65,6 +81,19 @@ export class GameScene extends Phaser.Scene {
   private lastMoveTime: number = 0;
   private moveInterval: number = 50; // Send move updates every 50ms
 
+  // HUD
+  private hud!: HUD;
+
+  // Game state
+  private gameState: Partial<GameState> = {
+    wave: 1,
+    maxWaves: 10,
+    phase: 'prep',
+    phaseTimer: 30000,
+    resources: { wood: 100, gold: 100 },
+    keep: { hp: 100, maxHp: 100 },
+  };
+
   constructor() {
     super({ key: 'GameScene' });
   }
@@ -104,6 +133,10 @@ export class GameScene extends Phaser.Scene {
 
     // Set up network listeners
     this.setupNetworkListeners();
+
+    // Create HUD
+    this.hud = new HUD(this);
+    this.hud.update(this.gameState);
   }
 
   private drawGrid(): void {
@@ -192,6 +225,23 @@ export class GameScene extends Phaser.Scene {
   }
 
   private setupNetworkListeners(): void {
+    // Handle game state (full state on join)
+    this.network.on('game_state', (data: { state: GameState }) => {
+      this.gameState = data.state;
+      this.hud.update(this.gameState);
+    });
+
+    // Handle phase changes
+    this.network.on(
+      'phase_change',
+      (data: { phase: string; wave?: number; timer?: number }) => {
+        this.gameState.phase = data.phase;
+        if (data.wave !== undefined) this.gameState.wave = data.wave;
+        if (data.timer !== undefined) this.gameState.phaseTimer = data.timer;
+        this.hud.update(this.gameState);
+      }
+    );
+
     // Handle state updates
     this.network.on('state_delta', (data: { players?: Partial<Player>[] }) => {
       if (data.players) {
@@ -394,6 +444,13 @@ export class GameScene extends Phaser.Scene {
   update(time: number, delta: number): void {
     if (!this.cursors || !this.wasd) return;
 
+    // Update HUD
+    if (this.gameState.phase === 'prep' && this.gameState.phaseTimer !== undefined) {
+      // Client-side timer countdown for smooth display
+      this.gameState.phaseTimer = Math.max(0, this.gameState.phaseTimer - delta);
+      this.hud.update(this.gameState);
+    }
+
     // Calculate movement direction
     let dx = 0;
     let dy = 0;
@@ -456,5 +513,9 @@ export class GameScene extends Phaser.Scene {
     this.remotePlayerHpBars.clear();
     this.playerLabels.clear();
     this.players.clear();
+
+    if (this.hud) {
+      this.hud.destroy();
+    }
   }
 }

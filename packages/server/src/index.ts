@@ -235,15 +235,17 @@ io.on('connection', (socket) => {
   });
 });
 
-// Game loop - broadcast state updates (20 ticks/sec)
+// Game loop - update and broadcast state (20 ticks/sec)
 setInterval(() => {
-  // For each game, broadcast state delta to all players
   const games = lobbyManager.getAllGames();
 
   for (const game of games) {
-    // Only broadcast during active phases (not lobby)
+    // Update game logic (phase manager, timers, etc.)
+    game.update(SERVER_CONFIG.tickMs);
+
+    // Broadcast state delta to all players during active phases
     if (game.phase === 'prep' || game.phase === 'wave') {
-      const players = game.getPlayers().map(p => ({
+      const players = game.getPlayers().map((p) => ({
         id: p.id,
         position: p.position,
         hp: p.hp,
