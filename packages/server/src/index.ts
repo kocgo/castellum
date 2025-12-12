@@ -118,6 +118,95 @@ io.on('connection', (socket) => {
     lobbyManager.handleReady(socket, data.ready);
   });
 
+  // Handle tower build
+  socket.on('build', (data: { gridX: number; gridY: number }) => {
+    const game = lobbyManager.getPlayerGame(socket.id);
+    if (!game) return;
+
+    const result = game.buildTower(data.gridX, data.gridY);
+    if (result.success && result.tower) {
+      // Broadcast tower built to all players
+      game.broadcast('tower_built', {
+        type: 'tower_built',
+        tower: result.tower,
+      });
+
+      // Broadcast updated resources
+      game.broadcast('resources_updated', {
+        type: 'resources_updated',
+        resources: game.resources,
+      });
+
+      console.log(`[Game ${game.id}] Tower built at (${data.gridX}, ${data.gridY})`);
+    } else {
+      socket.emit('error', {
+        type: 'error',
+        code: 'BUILD_FAILED',
+        message: result.error || 'Failed to build tower',
+      });
+    }
+  });
+
+  // Handle tower upgrade
+  socket.on('upgrade', (data: { towerId: string }) => {
+    const game = lobbyManager.getPlayerGame(socket.id);
+    if (!game) return;
+
+    const result = game.upgradeTower(data.towerId);
+    if (result.success && result.level !== undefined) {
+      // Broadcast tower upgraded to all players
+      game.broadcast('tower_upgraded', {
+        type: 'tower_upgraded',
+        towerId: data.towerId,
+        level: result.level,
+      });
+
+      // Broadcast updated resources
+      game.broadcast('resources_updated', {
+        type: 'resources_updated',
+        resources: game.resources,
+      });
+
+      console.log(`[Game ${game.id}] Tower ${data.towerId} upgraded to level ${result.level}`);
+    } else {
+      socket.emit('error', {
+        type: 'error',
+        code: 'UPGRADE_FAILED',
+        message: result.error || 'Failed to upgrade tower',
+      });
+    }
+  });
+
+  // Handle tower sell
+  socket.on('sell', (data: { towerId: string }) => {
+    const game = lobbyManager.getPlayerGame(socket.id);
+    if (!game) return;
+
+    const result = game.sellTower(data.towerId);
+    if (result.success && result.refund) {
+      // Broadcast tower sold to all players
+      game.broadcast('tower_sold', {
+        type: 'tower_sold',
+        towerId: data.towerId,
+        refund: result.refund,
+      });
+
+      // Broadcast updated resources
+      game.broadcast('resources_updated', {
+        type: 'resources_updated',
+        resources: game.resources,
+      });
+
+      console.log(`[Game ${game.id}] Tower ${data.towerId} sold`);
+    } else {
+      socket.emit('error', {
+        type: 'error',
+        code: 'SELL_FAILED',
+        message: result.error || 'Failed to sell tower',
+      });
+    }
+  });
+
   // Handle movement
   socket.on('move', (data: { direction: { x: number; y: number }; timestamp: number }) => {
     const game = lobbyManager.getPlayerGame(socket.id);
