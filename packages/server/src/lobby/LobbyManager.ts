@@ -110,6 +110,26 @@ export class LobbyManager {
     console.log(
       `[Lobby] Player ${socket.id} ready: ${ready} in game ${gameId}`
     );
+
+    // Check if all players are ready and start the game
+    if (ready && game.isAllReady() && game.phase === 'lobby') {
+      this.startGame(game);
+    }
+  }
+
+  private startGame(game: GameInstance): void {
+    console.log(`[Lobby] Starting game ${game.id}`);
+    game.phase = 'prep';
+    game.wave = 1;
+    game.phaseTimer = 30 * 1000; // First prep is 30 seconds
+
+    // Broadcast phase change
+    game.broadcast('phase_change', {
+      type: 'phase_change',
+      phase: 'prep',
+      wave: 1,
+      timer: game.phaseTimer,
+    });
   }
 
   getGame(gameId: string): GameInstance | undefined {
@@ -119,5 +139,9 @@ export class LobbyManager {
   getPlayerGame(socketId: string): GameInstance | undefined {
     const gameId = this.playerGameMap.get(socketId);
     return gameId ? this.games.get(gameId) : undefined;
+  }
+
+  getAllGames(): GameInstance[] {
+    return Array.from(this.games.values());
   }
 }
