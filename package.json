@@ -1,0 +1,20 @@
+{
+  "name": "castellum",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:client": "npm run dev -w @castellum/client",
+    "dev:server": "npm run dev -w @castellum/server",
+    "build:client": "npm run build -w @castellum/client",
+    "build:server": "npm run build -w @castellum/server",
+    "build:shared": "npm run build -w @castellum/shared",
+    "build": "npm run build:shared && npm run build:client && npm run build:server",
+    "start": "npm run start -w @castellum/server"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}
