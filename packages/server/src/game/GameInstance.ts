@@ -1,5 +1,6 @@
 import { Socket, Server } from 'socket.io';
 import { PhaseManager } from './PhaseManager';
+import { WaveManager } from './WaveManager';
 
 // Types inline to avoid import issues
 interface Vector2 {
@@ -37,6 +38,24 @@ interface Tower {
   lastFireTime: number;
 }
 
+interface Enemy {
+  id: string;
+  type: 'barbarian';
+  position: Vector2;
+  hp: number;
+  maxHp: number;
+  speed: number;
+  damage: number;
+  targetId: string | null;
+  lastAttackTime?: number;
+}
+
+interface Keep {
+  position: Vector2;
+  hp: number;
+  maxHp: number;
+}
+
 // Constants
 const PLAYER_MAX_HP = 100;
 const STARTING_GOLD = 100;
@@ -68,12 +87,19 @@ export class GameInstance {
     gold: STARTING_GOLD,
     wood: STARTING_WOOD,
   };
+  public keep: Keep = {
+    position: { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 - 32 },
+    hp: 100,
+    maxHp: 100,
+  };
 
   private players: Map<string, Player> = new Map();
   private sockets: Map<string, Socket> = new Map();
   private colorIndex: number = 0;
   private phaseManager: PhaseManager;
+  private waveManager: WaveManager;
   private towers: Map<string, Tower> = new Map();
+  private enemies: Map<string, Enemy> = new Map();
   private nextTowerId: number = 0;
 
   constructor(
@@ -82,11 +108,129 @@ export class GameInstance {
   ) {
     this.id = gameId;
     this.phaseManager = new PhaseManager(this);
+    this.waveManager = new WaveManager(this);
   }
 
   update(dt: number): void {
     // Update phase manager
     this.phaseManager.update(dt);
+
+    // Update wave manager (enemy spawning)
+    if (this.phase === 'wave') {
+      this.waveManager.update(dt);
+      this.updateEnemies(dt);
+      this.checkEnemyPlayerCollisions();
+    }
+  }
+
+  private updateEnemies(dt: number): void {
+    const dtSeconds = dt / 1000;
+    const currentTime = Date.now();
+    const ATTACK_RATE = 1000; // ms between attacks
+
+    for (const enemy of this.enemies.values()) {
+      // Move enemy toward keep
+      const dx = this.keep.position.x - enemy.position.x;
+      const dy = this.keep.position.y - enemy.position.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance > 50) {
+        // Move toward keep
+        const normalizedX = dx / distance;
+        const normalizedY = dy / distance;
+
+        enemy.position.x += normalizedX * enemy.speed * dtSeconds;
+        enemy.position.y += normalizedY * enemy.speed * dtSeconds;
+      } else {
+        // Close enough to attack keep
+        if (!enemy.lastAttackTime || currentTime - enemy.lastAttackTime >= ATTACK_RATE) {
+          this.damageKeep(enemy.damage);
+          enemy.lastAttackTime = currentTime;
+        }
+      }
+    }
+  }
+
+  private damageKeep(damage: number): void {
+    this.keep.hp -= damage;
+
+    if (this.keep.hp < 0) {
+      this.keep.hp = 0;
+    }
+
+    console.log(`[GameInstance] Keep took ${damage} damage, HP: ${this.keep.hp}/${this.keep.maxHp}`);
+
+    // Broadcast keep damage
+    this.broadcast('keep_damaged', {
+      type: 'keep_damaged',
+      hp: this.keep.hp,
+      maxHp: this.keep.maxHp,
+    });
+
+    // Check for game over
+    if (this.keep.hp <= 0) {
+      this.getPhaseManager().gameOver();
+    }
+  }
+
+  private checkEnemyPlayerCollisions(): void {
+    const PLAYER_RADIUS = 12;
+    const ENEMY_RADIUS = 10;
+    const COLLISION_DISTANCE = PLAYER_RADIUS + ENEMY_RADIUS;
+    const ATTACK_RATE = 1000; // ms between attacks
+    const currentTime = Date.now();
+
+    for (const enemy of this.enemies.values()) {
+      for (const player of this.players.values()) {
+        if (!player.isAlive || !player.isConnected) continue;
+
+        const dx = player.position.x - enemy.position.x;
+        const dy = player.position.y - enemy.position.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < COLLISION_DISTANCE) {
+          // Check if enemy can attack (rate limiting)
+          if (!enemy.lastAttackTime || currentTime - enemy.lastAttackTime >= ATTACK_RATE) {
+            this.damagePlayer(player.id, enemy.damage);
+            enemy.lastAttackTime = currentTime;
+          }
+        }
+      }
+    }
+  }
+
+  private damagePlayer(playerId: string, damage: number): void {
+    const player = this.players.get(playerId);
+    if (!player || !player.isAlive) return;
+
+    player.hp -= damage;
+
+    if (player.hp < 0) {
+      player.hp = 0;
+    }
+
+    console.log(`[GameInstance] Player ${player.nickname} took ${damage} damage, HP: ${player.hp}/${player.maxHp}`);
+
+    // Check for death
+    if (player.hp <= 0) {
+      player.isAlive = false;
+
+      // Move player to altar as ghost
+      const altarPosition = {
+        x: MAP_WIDTH / 2,
+        y: MAP_HEIGHT / 2 + 48,
+      };
+      player.position = altarPosition;
+
+      console.log(`[GameInstance] Player ${player.nickname} died`);
+
+      // Broadcast player death
+      this.broadcast('player_died', {
+        type: 'player_died',
+        playerId: player.id,
+        position: altarPosition,
+      });
+    }
   }
 
   addPlayer(socket: Socket, nickname: string): Player | null {
@@ -163,6 +307,26 @@ export class GameInstance {
 
   getTowers(): Tower[] {
     return Array.from(this.towers.values());
+  }
+
+  addEnemy(enemy: Enemy): void {
+    this.enemies.set(enemy.id, enemy);
+  }
+
+  getEnemies(): Enemy[] {
+    return Array.from(this.enemies.values());
+  }
+
+  removeEnemy(enemyId: string): void {
+    this.enemies.delete(enemyId);
+  }
+
+  getWaveManager(): WaveManager {
+    return this.waveManager;
+  }
+
+  getPhaseManager(): PhaseManager {
+    return this.phaseManager;
   }
 
   buildTower(gridX: number, gridY: number): { success: boolean; error?: string; tower?: Tower } {
@@ -284,15 +448,11 @@ export class GameInstance {
       phaseTimer: this.phaseTimer,
       resources: this.resources,
       players: this.getPlayers(),
-      enemies: [],
+      enemies: this.getEnemies(),
       towers: this.getTowers(),
       loot: [],
       projectiles: [],
-      keep: {
-        position: { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 - 32 },
-        hp: 100,
-        maxHp: 100,
-      },
+      keep: this.keep,
       altar: {
         position: { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 + 48 },
       },
