@@ -27,15 +27,19 @@ export class PhaseManager {
   }
 
   private updateWave(_dt: number): void {
-    // Wave phase continues until all enemies are dead
-    // This will be implemented in Phase 7 when we add enemies
-    // For now, just check if we should end the wave manually
+    // Check if wave is complete (all enemies spawned and defeated)
+    if (this.game.getWaveManager().isWaveComplete()) {
+      this.endWave();
+    }
   }
 
   startWavePhase(): void {
     console.log(`[Phase] Starting wave ${this.game.wave}`);
     this.game.phase = 'wave';
     this.game.phaseTimer = 0;
+
+    // Start spawning enemies
+    this.game.getWaveManager().startWave();
 
     this.game.broadcast('phase_change', {
       type: 'phase_change',
