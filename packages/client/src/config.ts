@@ -26,6 +26,8 @@ export const COLORS = {
   healthBarLow: 0xff0000,    // Red
 } as const;
 
+// In development, use the current page's host (works for both localhost and LAN IPs)
+// Vite will proxy /socket.io to localhost:3000
 export const SERVER_URL = import.meta.env.PROD
   ? window.location.origin
-  : 'http://localhost:3000';
+  : window.location.origin; // Let Vite proxy handle it
