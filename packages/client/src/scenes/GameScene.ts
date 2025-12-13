@@ -40,6 +40,25 @@ interface GameState {
   };
 }
 
+interface Tower {
+  id: string;
+  type: 'archer';
+  position: { x: number; y: number }; // Grid position
+  level: number;
+  hp: number;
+  maxHp: number;
+}
+
+interface Enemy {
+  id: string;
+  type: 'barbarian';
+  position: { x: number; y: number }; // World position
+  hp: number;
+  maxHp: number;
+  speed: number;
+  damage: number;
+}
+
 export class GameScene extends Phaser.Scene {
   // Network
   private network!: NetworkManager;
@@ -94,6 +113,23 @@ export class GameScene extends Phaser.Scene {
     keep: { hp: 100, maxHp: 100 },
   };
 
+  // Build mode
+  private buildMode: boolean = false;
+  private gridHoverRect: Phaser.GameObjects.Rectangle | null = null;
+
+  // Towers
+  private towerGraphics: Map<string, Phaser.GameObjects.Rectangle> = new Map();
+  private towers: Map<string, Tower> = new Map();
+
+  // Enemies
+  private enemyGraphics: Map<string, Phaser.GameObjects.Arc> = new Map();
+  private enemyHpBars: Map<string, Phaser.GameObjects.Graphics> = new Map();
+  private enemies: Map<string, Enemy> = new Map();
+
+  // Dev tools
+  private devToolsEnabled: boolean = false;
+  private devToolsText!: Phaser.GameObjects.Text;
+
   constructor() {
     super({ key: 'GameScene' });
   }
@@ -137,6 +173,9 @@ export class GameScene extends Phaser.Scene {
     // Create HUD
     this.hud = new HUD(this);
     this.hud.update(this.gameState);
+
+    // Create dev tools overlay (hidden by default)
+    this.createDevTools();
   }
 
   private drawGrid(): void {
@@ -221,7 +260,124 @@ export class GameScene extends Phaser.Scene {
         S: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S),
         D: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D),
       };
+
+      // Toggle build mode with B key
+      const bKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.B);
+      bKey.on('down', () => {
+        this.toggleBuildMode();
+      });
+
+      // Toggle dev tools with backtick/tilde key
+      const devKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.BACKTICK);
+      devKey.on('down', () => {
+        this.toggleDevTools();
+      });
     }
+
+    // Click to build
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (this.buildMode) {
+        this.handleBuildClick(pointer.x, pointer.y);
+      }
+    });
+
+    // Hover effect for build mode
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (this.buildMode) {
+        this.updateBuildHover(pointer.x, pointer.y);
+      }
+    });
+  }
+
+  private toggleBuildMode(): void {
+    this.buildMode = !this.buildMode;
+    console.log(`Build mode: ${this.buildMode ? 'ON' : 'OFF'}`);
+
+    if (this.buildMode) {
+      this.hud.setBuildModeActive(true);
+    } else {
+      this.hud.setBuildModeActive(false);
+      // Remove hover rect
+      if (this.gridHoverRect) {
+        this.gridHoverRect.destroy();
+        this.gridHoverRect = null;
+      }
+    }
+  }
+
+  private updateBuildHover(x: number, y: number): void {
+    const gridX = Math.floor(x / GAME_CONFIG.tileSize);
+    const gridY = Math.floor(y / GAME_CONFIG.tileSize);
+
+    // Remove old hover rect
+    if (this.gridHoverRect) {
+      this.gridHoverRect.destroy();
+    }
+
+    // Create new hover rect
+    this.gridHoverRect = this.add.rectangle(
+      gridX * GAME_CONFIG.tileSize,
+      gridY * GAME_CONFIG.tileSize,
+      GAME_CONFIG.tileSize,
+      GAME_CONFIG.tileSize,
+      0x32cd32,
+      0.3
+    );
+    this.gridHoverRect.setOrigin(0, 0);
+    this.gridHoverRect.setStrokeStyle(2, 0x32cd32);
+  }
+
+  private handleBuildClick(x: number, y: number): void {
+    const gridX = Math.floor(x / GAME_CONFIG.tileSize);
+    const gridY = Math.floor(y / GAME_CONFIG.tileSize);
+
+    console.log(`Attempting to build at grid (${gridX}, ${gridY})`);
+    this.network.buildTower(gridX, gridY);
+
+    // Turn off build mode after building
+    this.toggleBuildMode();
+  }
+
+  private createDevTools(): void {
+    this.devToolsText = this.add
+      .text(10, 120, '', {
+        fontSize: '14px',
+        color: '#00ff00',
+        backgroundColor: '#000000',
+        padding: { x: 10, y: 10 },
+        fontFamily: 'monospace',
+      })
+      .setOrigin(0, 0)
+      .setDepth(1000)
+      .setVisible(false);
+  }
+
+  private toggleDevTools(): void {
+    this.devToolsEnabled = !this.devToolsEnabled;
+    this.devToolsText.setVisible(this.devToolsEnabled);
+    console.log(`Dev tools: ${this.devToolsEnabled ? 'ON' : 'OFF'}`);
+  }
+
+  private updateDevTools(): void {
+    if (!this.devToolsEnabled) return;
+
+    const info = [
+      '=== DEV TOOLS (Press ~ to toggle) ===',
+      `Game ID: ${this._gameId}`,
+      `Player ID: ${this.localPlayerId}`,
+      `Phase: ${this.gameState.phase} | Wave: ${this.gameState.wave}/${this.gameState.maxWaves}`,
+      `Resources: Wood ${this.gameState.resources?.wood || 0} | Gold ${this.gameState.resources?.gold || 0}`,
+      `Keep HP: ${this.gameState.keep?.hp || 0}/${this.gameState.keep?.maxHp || 0}`,
+      ``,
+      `Players: ${this.players.size + 1} (1 local + ${this.players.size} remote)`,
+      `Towers: ${this.towers.size}`,
+      `Enemies: ${this.enemies.size}`,
+      ``,
+      `Local Player Position: (${Math.round(this.localPlayerX)}, ${Math.round(this.localPlayerY)})`,
+      `Build Mode: ${this.buildMode ? 'ON' : 'OFF'}`,
+    ];
+
+    this.devToolsText.setText(info.join('\n'));
   }
 
   private setupNetworkListeners(): void {
@@ -243,7 +399,7 @@ export class GameScene extends Phaser.Scene {
     );
 
     // Handle state updates
-    this.network.on('state_delta', (data: { players?: Partial<Player>[] }) => {
+    this.network.on('state_delta', (data: { players?: Partial<Player>[]; enemies?: Partial<Enemy>[] }) => {
       if (data.players) {
         for (const playerData of data.players) {
           if (!playerData.id) continue;
@@ -260,6 +416,13 @@ export class GameScene extends Phaser.Scene {
           }
         }
       }
+
+      if (data.enemies) {
+        for (const enemyData of data.enemies) {
+          if (!enemyData.id) continue;
+          this.updateEnemy(enemyData);
+        }
+      }
     });
 
     // Handle new player joining
@@ -272,6 +435,48 @@ export class GameScene extends Phaser.Scene {
     // Handle player leaving
     this.network.on('player_left', (data: { playerId: string }) => {
       this.removeRemotePlayer(data.playerId);
+    });
+
+    // Handle tower built
+    this.network.on('tower_built', (data: { tower: Tower }) => {
+      this.addTower(data.tower);
+    });
+
+    // Handle tower upgraded
+    this.network.on('tower_upgraded', (data: { towerId: string; level: number }) => {
+      this.upgradeTower(data.towerId, data.level);
+    });
+
+    // Handle tower sold
+    this.network.on('tower_sold', (data: { towerId: string }) => {
+      this.removeTower(data.towerId);
+    });
+
+    // Handle resources updated
+    this.network.on('resources_updated', (data: { resources: { wood: number; gold: number } }) => {
+      if (this.gameState) {
+        this.gameState.resources = data.resources;
+        this.hud.update(this.gameState);
+      }
+    });
+
+    // Handle enemy spawned
+    this.network.on('enemy_spawned', (data: { enemy: Enemy }) => {
+      this.addEnemy(data.enemy);
+    });
+
+    // Handle enemy died
+    this.network.on('enemy_died', (data: { enemyId: string }) => {
+      this.removeEnemy(data.enemyId);
+    });
+
+    // Handle keep damaged
+    this.network.on('keep_damaged', (data: { hp: number; maxHp: number }) => {
+      if (this.gameState.keep) {
+        this.gameState.keep.hp = data.hp;
+        this.gameState.keep.maxHp = data.maxHp;
+        this.hud.update(this.gameState);
+      }
     });
   }
 
@@ -379,6 +584,152 @@ export class GameScene extends Phaser.Scene {
       this.remotePlayerHpBars.delete(playerId);
     }
     this.players.delete(playerId);
+  }
+
+  private addTower(tower: Tower): void {
+    if (this.towerGraphics.has(tower.id)) return;
+
+    // Convert grid position to world position
+    const worldX = tower.position.x * GAME_CONFIG.tileSize;
+    const worldY = tower.position.y * GAME_CONFIG.tileSize;
+
+    // Color based on level
+    const colors = [0x32cd32, 0x228b22, 0x006400]; // Green shades
+    const color = colors[tower.level - 1] || colors[0];
+
+    const graphics = this.add.rectangle(
+      worldX,
+      worldY,
+      GAME_CONFIG.tileSize - 4,
+      GAME_CONFIG.tileSize - 4,
+      color
+    );
+    graphics.setOrigin(0, 0);
+    graphics.setStrokeStyle(2, color - 0x111111);
+    graphics.setDepth(5);
+
+    this.towerGraphics.set(tower.id, graphics);
+    this.towers.set(tower.id, tower);
+
+    console.log(`[GameScene] Tower ${tower.id} added at grid (${tower.position.x}, ${tower.position.y})`);
+  }
+
+  private upgradeTower(towerId: string, level: number): void {
+    const tower = this.towers.get(towerId);
+    const graphics = this.towerGraphics.get(towerId);
+
+    if (!tower || !graphics) return;
+
+    tower.level = level;
+
+    // Update color based on level
+    const colors = [0x32cd32, 0x228b22, 0x006400];
+    const color = colors[level - 1] || colors[0];
+
+    graphics.setFillStyle(color);
+    graphics.setStrokeStyle(2, color - 0x111111);
+
+    console.log(`[GameScene] Tower ${towerId} upgraded to level ${level}`);
+  }
+
+  private removeTower(towerId: string): void {
+    const graphics = this.towerGraphics.get(towerId);
+
+    if (graphics) {
+      graphics.destroy();
+      this.towerGraphics.delete(towerId);
+    }
+
+    this.towers.delete(towerId);
+    console.log(`[GameScene] Tower ${towerId} removed`);
+  }
+
+  private addEnemy(enemy: Enemy): void {
+    if (this.enemyGraphics.has(enemy.id)) return;
+
+    const graphics = this.add.circle(
+      enemy.position.x,
+      enemy.position.y,
+      10, // radius
+      COLORS.enemy
+    );
+    graphics.setStrokeStyle(2, 0x992222);
+    graphics.setDepth(8);
+
+    const hpBar = this.add.graphics();
+    hpBar.setDepth(9);
+
+    this.enemyGraphics.set(enemy.id, graphics);
+    this.enemyHpBars.set(enemy.id, hpBar);
+    this.enemies.set(enemy.id, enemy);
+
+    this.updateEnemyHpBar(enemy.id, enemy.position.x, enemy.position.y, enemy.hp / enemy.maxHp);
+
+    console.log(`[GameScene] Enemy ${enemy.id} spawned at (${enemy.position.x}, ${enemy.position.y})`);
+  }
+
+  private updateEnemyHpBar(enemyId: string, x: number, y: number, hpPercent: number): void {
+    const hpBar = this.enemyHpBars.get(enemyId);
+    if (!hpBar) return;
+
+    hpBar.clear();
+
+    const barWidth = 20;
+    const barHeight = 3;
+    const barX = x - barWidth / 2;
+    const barY = y - 15;
+
+    // Background
+    hpBar.fillStyle(0x660000, 1);
+    hpBar.fillRect(barX, barY, barWidth, barHeight);
+
+    // HP fill
+    hpBar.fillStyle(0xff0000, 1);
+    hpBar.fillRect(barX, barY, barWidth * hpPercent, barHeight);
+
+    // Border
+    hpBar.lineStyle(1, 0xffffff, 0.5);
+    hpBar.strokeRect(barX, barY, barWidth, barHeight);
+  }
+
+  private updateEnemy(enemyData: Partial<Enemy> & { id: string }): void {
+    const graphics = this.enemyGraphics.get(enemyData.id);
+    const existingEnemy = this.enemies.get(enemyData.id);
+
+    if (!graphics || !existingEnemy) return;
+
+    if (enemyData.position) {
+      graphics.setPosition(enemyData.position.x, enemyData.position.y);
+
+      // Update HP bar
+      const hpPercent =
+        enemyData.hp !== undefined && enemyData.maxHp !== undefined
+          ? enemyData.hp / enemyData.maxHp
+          : existingEnemy.hp / existingEnemy.maxHp;
+
+      this.updateEnemyHpBar(enemyData.id, enemyData.position.x, enemyData.position.y, hpPercent);
+    }
+
+    // Update stored enemy data
+    Object.assign(existingEnemy, enemyData);
+  }
+
+  private removeEnemy(enemyId: string): void {
+    const graphics = this.enemyGraphics.get(enemyId);
+    const hpBar = this.enemyHpBars.get(enemyId);
+
+    if (graphics) {
+      graphics.destroy();
+      this.enemyGraphics.delete(enemyId);
+    }
+
+    if (hpBar) {
+      hpBar.destroy();
+      this.enemyHpBars.delete(enemyId);
+    }
+
+    this.enemies.delete(enemyId);
+    console.log(`[GameScene] Enemy ${enemyId} removed`);
   }
 
   private clamp(value: number, min: number, max: number): number {
@@ -502,6 +853,9 @@ export class GameScene extends Phaser.Scene {
         this.lastMoveTime = time;
       }
     }
+
+    // Update dev tools
+    this.updateDevTools();
   }
 
   shutdown(): void {

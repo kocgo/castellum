@@ -187,6 +187,16 @@ export class HUD {
     }
   }
 
+  setBuildModeActive(active: boolean): void {
+    if (active) {
+      this.buildButton.setColor('#32cd32');
+      this.buildButton.setText('[B] Build (ACTIVE - Click to place)');
+    } else {
+      this.buildButton.setColor('#888888');
+      this.buildButton.setText('[B] Build');
+    }
+  }
+
   destroy(): void {
     this.container.destroy();
   }

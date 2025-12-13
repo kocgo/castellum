@@ -341,11 +341,18 @@ setInterval(() => {
         isAlive: p.isAlive,
       }));
 
-      if (players.length > 0) {
+      const enemies = game.getEnemies().map((e) => ({
+        id: e.id,
+        position: e.position,
+        hp: e.hp,
+      }));
+
+      if (players.length > 0 || enemies.length > 0) {
         game.broadcast('state_delta', {
           type: 'state_delta',
           timestamp: Date.now(),
           players,
+          enemies,
         });
       }
     }

@@ -75,4 +75,16 @@ export class NetworkManager extends Phaser.Events.EventEmitter {
   voteSkip(): void {
     this.socket?.emit('vote_skip');
   }
+
+  buildTower(gridX: number, gridY: number): void {
+    this.socket?.emit('build', { gridX, gridY });
+  }
+
+  upgradeTower(towerId: string): void {
+    this.socket?.emit('upgrade', { towerId });
+  }
+
+  sellTower(towerId: string): void {
+    this.socket?.emit('sell', { towerId });
+  }
 }
